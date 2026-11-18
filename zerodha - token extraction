@@ -1,0 +1,195 @@
+# ==========================================================
+# SSEI - ZERODHA AUTOMATIC ACCESS TOKEN GENERATOR
+# ==========================================================
+
+from kiteconnect import KiteConnect
+from http.server import HTTPServer, BaseHTTPRequestHandler
+from urllib.parse import urlparse, parse_qs
+import webbrowser
+import os
+
+# ==========================================================
+# 1. API CREDENTIALS
+# ==========================================================
+
+API_KEY = "paste the api key "
+API_SECRET = "paste the api secret"
+
+REDIRECT_URL = "paste the redirect URL"
+
+# ==========================================================
+# 2. CHECK CREDENTIALS
+# ==========================================================
+
+if "PASTE_" in API_KEY or "PASTE_" in API_SECRET:
+    raise ValueError("Please enter your API Key and API Secret.")
+
+# ==========================================================
+# 3. INITIALISE KITE
+# ==========================================================
+
+kite = KiteConnect(api_key=API_KEY)
+
+# Store callback information
+callback_result = {
+    "request_token": None,
+    "error": None,
+    "done": False
+}
+
+# ==========================================================
+# 4. LOCAL CALLBACK SERVER
+# ==========================================================
+
+class CallbackHandler(BaseHTTPRequestHandler):
+
+    def do_GET(self):
+
+        parsed_url = urlparse(self.path)
+
+        if parsed_url.path != "/callback":
+            self.send_response(404)
+            self.end_headers()
+            self.wfile.write(b"Invalid callback URL.")
+            return
+
+        params = parse_qs(parsed_url.query)
+
+        status = params.get("status", [""])[0]
+        request_token = params.get("request_token", [None])[0]
+        error_message = params.get("message", [""])[0]
+
+        if status == "success" and request_token:
+            callback_result["request_token"] = request_token
+            callback_result["done"] = True
+
+            message = (
+                "<h2>Zerodha login successful!</h2>"
+                "<p>Request token received. "
+                "You can return to VS Code.</p>"
+            )
+
+        else:
+            callback_result["error"] = (
+                error_message or "Login failed or request token missing."
+            )
+            callback_result["done"] = True
+
+            message = (
+                "<h2>Zerodha login was not successful.</h2>"
+                "<p>Please check the VS Code terminal.</p>"
+            )
+
+        self.send_response(200)
+        self.send_header("Content-Type", "text/html")
+        self.end_headers()
+        self.wfile.write(message.encode("utf-8"))
+
+    def log_message(self, format, *args):
+        pass
+
+
+# ==========================================================
+# 5. START LOCAL SERVER
+# ==========================================================
+
+server = HTTPServer(
+    ("127.0.0.1", 8000),
+    CallbackHandler
+)
+
+server.timeout = 300
+
+print("\n====================================")
+print("SSEI ZERODHA TOKEN GENERATOR")
+print("====================================")
+
+print("\nLocal callback server started.")
+print("Callback URL:", REDIRECT_URL)
+
+# ==========================================================
+# 6. OPEN ZERODHA LOGIN
+# ==========================================================
+
+login_url = kite.login_url()
+
+print("\nOpening Zerodha login page...")
+
+webbrowser.open(login_url)
+
+print("\nPlease log in and authorise your application.")
+print("Waiting for Zerodha callback...")
+
+try:
+
+    while not callback_result["done"]:
+        server.handle_request()
+
+finally:
+    server.server_close()
+
+# ==========================================================
+# 7. CHECK CALLBACK
+# ==========================================================
+
+if callback_result["error"]:
+    raise Exception(
+        "Zerodha login failed: " + callback_result["error"]
+    )
+
+request_token = callback_result["request_token"]
+
+if not request_token:
+    raise Exception("No request token received.")
+
+print("\nRequest token received successfully.")
+
+# ==========================================================
+# 8. GENERATE ACCESS TOKEN
+# ==========================================================
+
+print("\nExchanging request token for access token...")
+
+try:
+
+    session_data = kite.generate_session(
+        request_token,
+        api_secret=API_SECRET
+    )
+
+    access_token = session_data["access_token"]
+
+    # ======================================================
+    # 9. SAVE ACCESS TOKEN
+    # ======================================================
+
+    folder = os.path.dirname(os.path.abspath(__file__))
+
+    token_path = os.path.join(
+        folder,
+        "access_token.txt"
+    )
+
+    with open(token_path, "w") as file:
+        file.write(access_token)
+
+    print("\n====================================")
+    print("SUCCESS! ACCESS TOKEN GENERATED")
+    print("====================================")
+
+    print("User:", session_data.get("user_name"))
+    print("Token saved:", token_path)
+
+    print("\nYou can now run:")
+    print('python "SSEI TRIVENI.PY"')
+
+except Exception as error:
+
+    print("\nTOKEN GENERATION FAILED!")
+    print("Error:", error)
+
+    print("\nCheck that your API Key and API Secret")
+    print("belong to the same Kite Connect application.")
+
+
+
